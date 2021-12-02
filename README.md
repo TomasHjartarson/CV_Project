@@ -1,1 +1,1 @@
-# CV_Project
+# Non-illuminated environment material detection

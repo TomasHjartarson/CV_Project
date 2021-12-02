@@ -1,0 +1,11 @@
+### Script to do the following
+
+### ALIGN & MERGE
+
+### WHITE BALANCE, DEOMSAIC, CHROMA, DENOISE
+
+### LOCAL TONE MAP
+
+### DEHAZE, GLOBAL TONE MAP 
+
+### SHARPEN, HUE & SATURATION

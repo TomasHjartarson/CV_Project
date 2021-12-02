@@ -1,0 +1,11 @@
+### Script to do the following
+
+### WHITE BALANCING
+
+### DEOMSAIC
+
+### DENOISE, SHARPEN
+
+### COLOR SPACE CONVERSION
+
+### GAMMA CORRECTION

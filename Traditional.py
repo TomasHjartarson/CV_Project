@@ -18,6 +18,7 @@ from colour_demosaicing import (
 #########################################################
 #                   SCRIPT FUNCTION
 
+#NOTICE: CAMERA image size currently set : 512x348
 ### WHITE BALANCING
 """
     White balance blaances the color temperature of the image.
@@ -48,6 +49,19 @@ from colour_demosaicing import (
     https://en.wikipedia.org/wiki/Gamma_correction
 """
 
+#########################################################
+#########################################################
+#########################################################
+#                   HELPING FUNCTIONS
+
+def adjust_gamma(image, gamma=1.0):
+	# build a lookup table mapping the pixel values [0, 255] to
+	# their adjusted gamma values
+	invGamma = 1.0 / gamma
+	table = np.array([((i / 255.0) ** invGamma) * 255
+		for i in np.arange(0, 256)]).astype("uint8")
+	# apply gamma correction using the lookup table
+	return cv2.LUT(image, table)
 
 
 #########################################################
@@ -62,15 +76,18 @@ White_balance = True
 white_gray_alg = False
 
 #Required for Ground Truth Algorithm 
-from_row =  200
-from_column = 300
-row_width =  75
-column_width = 75
+from_row =  240
+from_column = 150
+row_width =  100
+column_width = 100
+
+#Current good values : 240 150 100 100
 
 #-----------------------
 #Demosaic:
 Demosaic = True 
 
+demo_filter = 'BGGR'
 #Use one of the following methods (Mark True)
 
 #Bilinear
@@ -87,30 +104,53 @@ Derived as a modification of bilinear interpolation (to complex to add here plea
 https://www.ipol.im/pub/art/2011/g_mhcd/article.pdf 
 """
 
-Malvar = False
+Malvar = True
 
 #Menon
 """
-
+http://elynxsdk.free.fr/ext-docs/Demosaicing/todo/Menon_Andriani_IEEE_T_IP_2007.pdf
 """
-Menon = True
+Menon = False
+
+#Current good values : Malvar
 
 #-----------------------
 #Denoise:
 Denoise = True 
 
+denoise_h = 5
+denoise_hcolor = 10
+Templatewindowsize = 7
+Searchwindowsize = 21
+
+#Current good values : 5 10 7 21
+
 #-----------------------
 #Sharpen
 Sharpen = True 
+
+#TO BE IMPLEMENTED
 
 #-----------------------
 #Color_space_conversion:
 Color_space_conversion = True
 
+
 #-----------------------
 #Gamma correction:
-Gamma_correction = True  
+Gamma_correction = False  
+
+#gamma = 1 doesn't do anything
+#gamma = 0 not allowed will give error
+gamma = 1.2
+
+#Current good value : 1.5 for high light images, 4 for really low light
 #-----------------------
+
+
+
+
+
 
 #########################################################
 #########################################################
@@ -134,17 +174,17 @@ def _white_balancing(image,height,size):
     
     #Gray World Algorithm
     if(white_gray_alg):
-        white_balanced_image = ((image * image.mean() / image.mean(axis=(0,1))).clip(0, 255).astype(int))
+        white_balanced_image = ((image * image.mean() / image.mean(axis=(0,1)))).clip(0,1)
     
     #Ground Truth Algorithm
     else:
         image_patch = image[from_row:from_row+row_width, from_column:from_column+column_width]
         white_balanced_image = ((image*1.0) / image_patch.max(axis=(0,1))).clip(0,1)
-        
+    print('White balancing')
     return white_balanced_image     
         
 def _Demosaic(image):
-    CFA = mosaicing_CFA_Bayer(image)
+    CFA = mosaicing_CFA_Bayer(image, demo_filter)
     
     if(Bilinear):
         Demosaic_image = colour.cctf_encoding(demosaicing_CFA_Bayer_bilinear(CFA)).clip(0,1)
@@ -157,19 +197,24 @@ def _Demosaic(image):
     
     if(not (Menon or Malvar or Bilinear)):
         Demosaic_image = image
-        
+    
+    print('Demosaicing')     
     return Demosaic_image
 
-
-
 def _Denoise(image):
+    Denoised_image = cv2.fastNlMeansDenoisingColored(image, None, denoise_h, denoise_hcolor, Templatewindowsize, Searchwindowsize)
+    print('Denoising')
     return Denoised_image
 
 def _Color_space_conversion(image):
-    
+    image = image.astype('float32')
+    CSV_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).clip(0,1)
+    print('Color_space_switching')
     return CSV_image
+
 def _Gamma_correction(image):
-    
+    print('Gamma corrected')
+    gamma_corrected_image = adjust_gamma(image, gamma=gamma)
     return gamma_corrected_image
 
 
@@ -182,45 +227,50 @@ def Process():
     ##Jump around images
     
     for sub_folder in os.listdir(DIR):
-
         Folder = DIR + "/" + sub_folder
         for file in os.listdir(Folder):
-            
+            print('### New image ###')
             image = cv2.imread(Folder + '/' + file)
             hT,wT,cT = image.shape
-            
-            #APPLY WHITE BALANCE
-            if(White_balance):
-                white_balanced_image = _white_balancing(image,hT,wT)
-            else:
-                white_balanced_image = image
-            
-            #APPLY DEMOSAIC
-            if(Demosaic):
-                Demosaic_image = _Demosaic(white_balanced_image)
-            else:
-                Demosaic_image = white_balanced_image
-            
+
             #APPLY DENOISE
             if(Denoise):
-                ...
-                
-            #APPLY COLOR_SPACE_CONVERSION
-            if(Color_space_conversion):
-                ...
-                
+                Denoised_image = _Denoise(image)
+            else:
+                Denoised_image = image
+
+            #APPLY WHITE BALANCE
+            if(White_balance):
+                white_balanced_image = _white_balancing(Denoised_image,hT,wT)
+            else:
+                white_balanced_image = Denoised_image 
+
             #APPLY GAMMA CORRECTION
             if(Gamma_correction):
-                ...
+                gamma_corrected_image = _Gamma_correction(white_balanced_image)
+            else:
+                gamma_corrected_image = white_balanced_image   
+
                 
+            #APPLY DEMOSAIC
+            if(Demosaic):
+                Demosaic_image = _Demosaic(gamma_corrected_image)
+                Demosaic_image = np.asarray(Demosaic_image)
+            else:
+                Demosaic_image = gamma_corrected_image
+                Demosaic_image = np.asarray(Demosaic_image)
+
+            #APPLY COLOR_SPACE_CONVERSION
+            if(Color_space_conversion):
+                CSV_image =  _Color_space_conversion(Demosaic_image)
+            else:
+                CSV_image = Demosaic_image
+                
+
             #Uncomment to view original vs modified image (change second parameter after which modification you want the view)
-            view_image(image,Demosaic_image)
+            view_image(image,CSV_image)
+            print(' ')
             
-
-
-
-
-
 
 
 if __name__ == '__main__':

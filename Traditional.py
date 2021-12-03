@@ -11,7 +11,8 @@ from colour_demosaicing import (
     demosaicing_CFA_Bayer_Menon2007,
     mosaicing_CFA_Bayer)
 
-
+from scipy.signal import convolve2d
+from skimage.color import rgb2yuv, yuv2rgb
 
 #########################################################
 #########################################################
@@ -63,6 +64,18 @@ def adjust_gamma(image, gamma=1.0):
 	# apply gamma correction using the lookup table
 	return cv2.LUT(image, table)
 
+def multi_convolver(image, kernel, iterations):
+    for i in range(iterations):
+        image = convolve2d(image, kernel, 'same', boundary = 'fill',
+                           fillvalue = 0)
+    return image
+
+def convolver_rgb(image, kernel, iterations = 1):
+        img_yuv = rgb2yuv(image)
+        img_yuv[:,:,0] = multi_convolver(img_yuv[:,:,0], kernel, 
+                                     iterations)
+        final_image = yuv2rgb(img_yuv)
+        return final_image
 
 #########################################################
 #########################################################
@@ -129,16 +142,20 @@ Searchwindowsize = 21
 #Sharpen
 Sharpen = True 
 
-#TO BE IMPLEMENTED
+# Sharpen
+sharpen_array = np.array([[0, -1, 0],
+                          [-1, 5, -1],
+                          [0, -1, 0]])
 
+sharpen_iteration = 1
 #-----------------------
 #Color_space_conversion:
-Color_space_conversion = True
+Color_space_conversion = False
 
 
 #-----------------------
 #Gamma correction:
-Gamma_correction = False  
+Gamma_correction = True  
 
 #gamma = 1 doesn't do anything
 #gamma = 0 not allowed will give error
@@ -170,8 +187,8 @@ def view_image(image,changed_image):
 
 
 def _white_balancing(image,height,size):
+    print('White balancing')
     #2 implemended methods
-    
     #Gray World Algorithm
     if(white_gray_alg):
         white_balanced_image = ((image * image.mean() / image.mean(axis=(0,1)))).clip(0,1)
@@ -180,10 +197,11 @@ def _white_balancing(image,height,size):
     else:
         image_patch = image[from_row:from_row+row_width, from_column:from_column+column_width]
         white_balanced_image = ((image*1.0) / image_patch.max(axis=(0,1))).clip(0,1)
-    print('White balancing')
+    
     return white_balanced_image     
         
 def _Demosaic(image):
+    print('Demosaicing')
     CFA = mosaicing_CFA_Bayer(image, demo_filter)
     
     if(Bilinear):
@@ -197,19 +215,23 @@ def _Demosaic(image):
     
     if(not (Menon or Malvar or Bilinear)):
         Demosaic_image = image
-    
-    print('Demosaicing')     
+         
     return Demosaic_image
 
 def _Denoise(image):
-    Denoised_image = cv2.fastNlMeansDenoisingColored(image, None, denoise_h, denoise_hcolor, Templatewindowsize, Searchwindowsize)
     print('Denoising')
+    Denoised_image = cv2.fastNlMeansDenoisingColored(image, None, denoise_h, denoise_hcolor, Templatewindowsize, Searchwindowsize)
     return Denoised_image
 
+def Sharpen(image):
+    print('Sharpening')
+    Sharpened_image = convolver_rgb(image, sharpen_array, sharpen_iteration)
+    return Sharpened_image
+
 def _Color_space_conversion(image):
+    print('Color_space_switching')
     image = image.astype('float32')
     CSV_image = cv2.cvtColor(image, cv2.COLOR_BGR2HSV).clip(0,1)
-    print('Color_space_switching')
     return CSV_image
 
 def _Gamma_correction(image):
@@ -233,11 +255,17 @@ def Process():
             image = cv2.imread(Folder + '/' + file)
             hT,wT,cT = image.shape
 
+            #APPLY GAMMA CORRECTION
+            if(Gamma_correction):
+                gamma_corrected_image = _Gamma_correction(image)
+            else:
+                gamma_corrected_image = image 
+
             #APPLY DENOISE
             if(Denoise):
-                Denoised_image = _Denoise(image)
+                Denoised_image = _Denoise(gamma_corrected_image)
             else:
-                Denoised_image = image
+                Denoised_image = gamma_corrected_image 
 
             #APPLY WHITE BALANCE
             if(White_balance):
@@ -245,19 +273,19 @@ def Process():
             else:
                 white_balanced_image = Denoised_image 
 
-            #APPLY GAMMA CORRECTION
-            if(Gamma_correction):
-                gamma_corrected_image = _Gamma_correction(white_balanced_image)
+            #APPLY SHARPENING
+            if(Sharpen):
+                Sharpened_image = Sharpen(white_balanced_image)
             else:
-                gamma_corrected_image = white_balanced_image   
-
-                
+                Sharpened_image = white_balanced_image
+             
+  
             #APPLY DEMOSAIC
             if(Demosaic):
-                Demosaic_image = _Demosaic(gamma_corrected_image)
+                Demosaic_image = _Demosaic(Sharpened_image)
                 Demosaic_image = np.asarray(Demosaic_image)
             else:
-                Demosaic_image = gamma_corrected_image
+                Demosaic_image = Sharpened_image
                 Demosaic_image = np.asarray(Demosaic_image)
 
             #APPLY COLOR_SPACE_CONVERSION

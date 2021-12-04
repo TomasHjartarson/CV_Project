@@ -13,6 +13,7 @@ from colour_demosaicing import (
 
 from scipy.signal import convolve2d
 from skimage.color import rgb2yuv, yuv2rgb
+from skimage import img_as_ubyte
 
 #########################################################
 #########################################################
@@ -38,6 +39,7 @@ from skimage.color import rgb2yuv, yuv2rgb
     image sharpening consists of adding to the original image a signal that is proportional 
     to a high-pass filtered version of the original image. 
     https://nptel.ac.in/content/storage2/courses/117104069/chapter_8/8_32.html
+    https://towardsdatascience.com/image-processing-with-python-blurring-and-sharpening-for-beginners-3bcebec0583a
 """
 ### COLOR SPACE CONVERSION
 """
@@ -76,6 +78,17 @@ def convolver_rgb(image, kernel, iterations = 1):
                                      iterations)
         final_image = yuv2rgb(img_yuv)
         return final_image
+
+def view_image(image,changed_image):      
+    fig, ax = plt.subplots(1,2, figsize=(10,6))
+    ax[0].imshow(image)
+    ax[0].set_title('Original Image')
+    
+    ax[1].imshow(changed_image)
+    ax[1].set_title('Modified image')
+    plt.show()
+    return
+
 
 #########################################################
 #########################################################
@@ -131,7 +144,7 @@ Menon = False
 #Denoise:
 Denoise = True 
 
-denoise_h = 5
+denoise_h = 7
 denoise_hcolor = 10
 Templatewindowsize = 7
 Searchwindowsize = 21
@@ -163,10 +176,8 @@ gamma = 1.2
 
 #Current good value : 1.5 for high light images, 4 for really low light
 #-----------------------
-
-
-
-
+#AOI
+AOI = False
 
 
 #########################################################
@@ -174,19 +185,9 @@ gamma = 1.2
 #########################################################
 #                   FUNCTIONS
 
-def view_image(image,changed_image):      
-    fig, ax = plt.subplots(1,2, figsize=(10,6))
-    ax[0].imshow(image)
-    ax[0].set_title('Original Image')
-    
-    ax[1].imshow(changed_image)
-    ax[1].set_title('Modified image')
-    plt.show()
-    return
             
 
-
-def _white_balancing(image,height,size):
+def _white_balancing(image):
     print('White balancing')
     #2 implemended methods
     #Gray World Algorithm
@@ -223,7 +224,7 @@ def _Denoise(image):
     Denoised_image = cv2.fastNlMeansDenoisingColored(image, None, denoise_h, denoise_hcolor, Templatewindowsize, Searchwindowsize)
     return Denoised_image
 
-def Sharpen(image):
+def _Sharpen(image):
     print('Sharpening')
     Sharpened_image = convolver_rgb(image, sharpen_array, sharpen_iteration)
     return Sharpened_image
@@ -240,6 +241,9 @@ def _Gamma_correction(image):
     return gamma_corrected_image
 
 
+def _AOI(image):
+    edges = cv2.Canny(image,1,200)
+    return edges
 
 ### Directory of images
 DIR = r'C:\Users\tomas\OneDrive\Documents\HR\CV\Project\Dummy_set'
@@ -251,6 +255,7 @@ def Process():
     for sub_folder in os.listdir(DIR):
         Folder = DIR + "/" + sub_folder
         for file in os.listdir(Folder):
+            start_time = time.time()
             print('### New image ###')
             image = cv2.imread(Folder + '/' + file)
             hT,wT,cT = image.shape
@@ -269,16 +274,15 @@ def Process():
 
             #APPLY WHITE BALANCE
             if(White_balance):
-                white_balanced_image = _white_balancing(Denoised_image,hT,wT)
+                white_balanced_image = _white_balancing(Denoised_image)
             else:
                 white_balanced_image = Denoised_image 
 
             #APPLY SHARPENING
             if(Sharpen):
-                Sharpened_image = Sharpen(white_balanced_image)
+                Sharpened_image = _Sharpen(white_balanced_image)
             else:
                 Sharpened_image = white_balanced_image
-             
   
             #APPLY DEMOSAIC
             if(Demosaic):
@@ -293,10 +297,16 @@ def Process():
                 CSV_image =  _Color_space_conversion(Demosaic_image)
             else:
                 CSV_image = Demosaic_image
-                
+
+            #APPLY AREA OF INTEREST
+            if(AOI):
+                AOI_image =  _AOI(image)
+            else:
+                AOI_image = CSV_image               
 
             #Uncomment to view original vs modified image (change second parameter after which modification you want the view)
-            view_image(image,CSV_image)
+            print("--- %s seconds ---" % (time.time() - start_time))
+            view_image(image,AOI_image)
             print(' ')
             
 

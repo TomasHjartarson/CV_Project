@@ -1,5 +1,6 @@
 import os
 import time
+import math
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -55,13 +56,23 @@ from skimage import img_as_ubyte
     
 """
 ### LOCAL TONE MAP
-"""
+""" 
+    LTM is used to widen the dynamic range of images
+    The dynamic range is defined as the ratio of the intensity of
+    the brightest point to the intensity of the darkest point in a scene or image.
+    For natural scenes, this ratio can reach up to the order of millions.
+    https://jieyang1987.github.io/files/el2018.pdf
 """
 ### DEHAZE, GLOBAL TONE MAP 
 """
-    Dehaze
+    Dehaze removing haze can significantly increase
+    the visibility of the scene and correct the color shift caused
+    by the airlight. In general, the haze-free image is more visually pleasing
     https://arxiv.org/pdf/1601.07661.pdf
     https://www.researchgate.net/publication/224212806_Real-Time_Dehazing_for_Image_and_Video
+    https://ieeexplore.ieee.org/document/5206515
+    https://github.com/He-Zhang/image_dehaze/blob/master/dehaze.py
+    
     Global Tone Map
 """ 
 ### SHARPEN, HUE & SATURATION
@@ -70,6 +81,11 @@ from skimage import img_as_ubyte
     to a high-pass filtered version of the original image. 
     https://nptel.ac.in/content/storage2/courses/117104069/chapter_8/8_32.html
     https://towardsdatascience.com/image-processing-with-python-blurring-and-sharpening-for-beginners-3bcebec0583a
+    
+    Hue
+    
+    
+    Saturation
 """
 
 #########################################################
@@ -77,14 +93,14 @@ from skimage import img_as_ubyte
 #########################################################
 #                   HELPING FUNCTIONS
 
-#the convolution method for sharpening (iteration function)
+#the convolution method for SHARPENING (iteration function)
 def multi_convolver(image, kernel, iterations):
     for i in range(iterations):
         image = convolve2d(image, kernel, 'same', boundary = 'fill',
                            fillvalue = 0)
     return image
 
-#Sharpening convolution method
+#SHARPENING convolution method
 def convolver_rgb(image, kernel, iterations = 1):
         img_yuv = rgb2yuv(image)
         img_yuv[:,:,0] = multi_convolver(img_yuv[:,:,0], kernel, 
@@ -103,7 +119,7 @@ def view_image(image,changed_image):
     plt.show()
     return
 
-#Displays red, green, blue channels
+#Displays red, green, blue channels (CHROMA)
 def rgb_splitter(image):
     rgb_list = ['Reds','Greens','Blues']
     fig, ax = plt.subplots(1, 3, figsize=(17,7), sharey = True)
@@ -113,7 +129,7 @@ def rgb_splitter(image):
         ax[i].axis('off')
     fig.tight_layout()
 
-#Displays Red, green chromacity image
+#Displays Red, green chromacity image (CHROMA)
 def RG_Chroma_plotter(red,green):
     p_color = [(r, g, 1-r-g) for r,g in 
                zip(red.flatten(),green.flatten())]
@@ -132,10 +148,10 @@ def RG_Chroma_plotter(red,green):
     plt.show()
 
 
-def gaussian(p,mean,std):
+def gaussian(p,mean,std): #(CHROMA)
     return np.exp(-(p-mean)**2/(2*std**2))*(1/(std*((2*np.pi)**0.5)))
 
-
+#CHROMA
 def rg_chroma_patch(image, patch_coor, mean = 1, std = 1):
     patch = image[patch_coor[0]:patch_coor[1],
                   patch_coor[2]:patch_coor[3]]
@@ -164,13 +180,14 @@ def rg_chroma_patch(image, patch_coor, mean = 1, std = 1):
     ax[0].set_axis_off()
     
     #clean the mask using area_opening
-    ax[1].imshow(final_mask, cmap = 'hot');
+    ax[1].imshow(final_mask, cmap = 'hot')
     ax[1].set_title('Mask', fontsize = 22)
     ax[1].set_axis_off()
     fig.tight_layout()
     
     return final_mask
 
+#CHROMA
 def apply_mask(image,mask):
     yuv_image = rgb2yuv(image)
     yuv_image[:,:,0] = yuv_image[:,:,0] * mask 
@@ -188,6 +205,116 @@ def apply_mask(image,mask):
     fig.tight_layout()
     
     return masked_image
+
+
+#DARK CHANNEL DEHAZE
+def DarkChannel(im,sz):
+    b,g,r = cv2.split(im)
+    dc = cv2.min(cv2.min(r,g),b)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT,(sz,sz))
+    dark = cv2.erode(dc,kernel)
+    return dark
+
+#Atmospheric light DEHAZE
+def AtmLight(im,dark):
+    [h,w] = im.shape[:2]
+    imsz = h*w
+    numpx = int(max(math.floor(imsz/1000),1))
+    darkvec = dark.reshape(imsz)
+    imvec = im.reshape(imsz,3)
+
+    indices = darkvec.argsort()
+    indices = indices[imsz-numpx::]
+
+    atmsum = np.zeros([1,3])
+    for ind in range(1,numpx):
+       atmsum = atmsum + imvec[indices[ind]]
+
+    A = atmsum / numpx
+    return A
+
+#DEHAZE
+def TransmissionEstimate(im,A,sz):
+    omega = 0.95
+    im3 = np.empty(im.shape,im.dtype)
+
+    for ind in range(0,3):
+        im3[:,:,ind] = im[:,:,ind]/A[0,ind]
+
+    transmission = 1 - omega*DarkChannel(im3,sz)
+    return transmission
+
+#DEHAZE
+def Guidedfilter(im,p,r,eps):
+    mean_I = cv2.boxFilter(im,cv2.CV_64F,(r,r))
+    mean_p = cv2.boxFilter(p, cv2.CV_64F,(r,r))
+    mean_Ip = cv2.boxFilter(im*p,cv2.CV_64F,(r,r))
+    cov_Ip = mean_Ip - mean_I*mean_p
+
+    mean_II = cv2.boxFilter(im*im,cv2.CV_64F,(r,r))
+    var_I   = mean_II - mean_I*mean_I
+
+    a = cov_Ip/(var_I + eps)
+    b = mean_p - a*mean_I
+
+    mean_a = cv2.boxFilter(a,cv2.CV_64F,(r,r))
+    mean_b = cv2.boxFilter(b,cv2.CV_64F,(r,r))
+
+    q = mean_a*im + mean_b
+    return q
+
+#Dehaze
+def TransmissionRefine(im,et):
+    im = im.astype('float32').clip(0,1)
+    gray = cv2.cvtColor(im,cv2.COLOR_BGR2GRAY)
+    gray = np.float64(gray)/255
+    r = 60
+    eps = 0.0001
+    t = Guidedfilter(gray,et,r,eps)
+
+    return t
+
+#Dehaze
+def Recover(im,t,A,tx = 0.1):
+    res = np.empty(im.shape,im.dtype)
+    t = cv2.max(t,tx)
+
+    for ind in range(0,3):
+        res[:,:,ind] = (im[:,:,ind]-A[0,ind])/t + A[0,ind]
+
+    return res
+
+#Local Tone map
+def reinhard_tonemap(irradiance_map, gamma=1/1.2, alpha=0.25):
+  C = 3 # num of channels
+  
+  # tone mapping parameters
+  E_map = np.empty_like(irradiance_map)
+
+  # normalize irradiance map
+  for ch in range(C):
+    map_channel = irradiance_map[:,:,ch]
+    E_min = map_channel.min()
+    E_max = map_channel.max()
+    E_map[:,:,ch] = (map_channel - E_min) / (E_max - E_min)
+
+  # gamma correction
+  E_map = E_map**gamma
+
+  # convert to grayscale and apply Reinhart Tone Mapping
+  L = cv2.cvtColor(E_map.astype('float32'), cv2.COLOR_RGB2GRAY)
+  print(L)
+  L_avg = np.exp(np.mean(np.log(L+1))) 
+  T = alpha / L_avg * (L+1)
+  L_tone = T * (1 + (T / (T.max())**2)) / (1 + T)
+  M = L_tone / (L+1)
+  
+  # apply scaling to each channel
+  tonemapped_img = np.empty_like(E_map)
+  for ch in range(C):
+    tonemapped_img[:,:,ch] = E_map[:,:,ch] * M
+    	
+  return np.clip(tonemapped_img, 0.0, 1.0)
 
 #########################################################
 #########################################################
@@ -261,10 +388,16 @@ Searchwindowsize = 21
 
 #-----------------------
 #Dehaze:
+Local_Tone_Map = True
+
+#-----------------------
+#Dehaze:
 Dehaze = True 
+
 #-----------------------
 #Global_tone_map:
 Global_tone_map = True  
+
 #-----------------------
 #Sharpen:
 Sharpen = True 
@@ -275,14 +408,6 @@ sharpen_array = np.array([[0, -1, 0],
                           [0, -1, 0]])
 
 sharpen_iteration = 1
-
-
-#-----------------------
-#Hue:
-Hue = True 
-#-----------------------
-#Saturation:
-Saturation = True 
 
 #-----------------------
 #AOI
@@ -303,8 +428,8 @@ def _alignMerge(images):
 
     exposureFusion = img_as_ubyte(exposureFusion)
     
-    cv2.imshow("exposureFusion", exposureFusion)
-    cv2.waitKey(0)
+    #cv2.imshow("exposureFusion", exposureFusion)
+    #cv2.waitKey(0)
     
     return exposureFusion
 
@@ -386,7 +511,6 @@ def _Demosaic(image):
     return Demosaic_image
 
 
-
 def _Chroma(image):
     print('Chroma')
     rgb_splitter(image)
@@ -396,8 +520,6 @@ def _Chroma(image):
     
     one_matrix = np.ones_like(float,shape=image_r.shape)
     image_b = one_matrix- (image_r +image_g)
-    
-
     
     patch = image[240:300,150:200]
     imshow(patch)
@@ -414,24 +536,34 @@ def _Chroma(image):
     
     return masked_image
 
+
 def _Denoise(image):
     print('Denoising')
     Denoised_image = cv2.fastNlMeansDenoisingColored(image, None, denoise_h, denoise_hcolor, Templatewindowsize, Searchwindowsize)
     return Denoised_image
 
-def _Dehaze():
-    ...
+
+def _Dehaze(image):
+    I = image.astype('float64')/255
+    print('Dehazing')
+    dark = DarkChannel(I,15)
+    A = AtmLight(I,dark)
+    te = TransmissionEstimate(I,A,15)
+    t = TransmissionRefine(image,te)
+    J = Recover(I,t,A,0.1)
+    
+    return J*255
+
+
+def _Local_Tone_Map(image):
+    print('Local tone map')
+    LTM = reinhard_tonemap(image, gamma=1/2.2, alpha=0.25)
+    return LTM
 
 def _Sharpen(image):
     print('Sharpening')
     Sharpened_image = convolver_rgb(image, sharpen_array, sharpen_iteration)
     return Sharpened_image
-
-def _Hue():
-    ...
-    
-def _Saturation():
-    ...
 
 
 def _AOI(image):
@@ -459,7 +591,7 @@ def Process():
             if(Denoise):
                 Denoised_image = _Denoise(alignMerged_image)
             else:
-                Denoised_image = alignMerged_image 
+                Denoised_image = alignMerged_image
 
             #APPLY WHITE BALANCE
             if(White_balance):
@@ -479,7 +611,17 @@ def Process():
                 Demosaic_image = np.asarray(Demosaic_image)
             else:
                 Demosaic_image = Sharpened_image
+
+            if(Local_Tone_Map):
+                Local_toned_image = _Local_Tone_Map(Demosaic_image)
+            else:
+                Local_toned_image = Demosaic_image
            
+            if(Dehaze):
+                Dehazed_image = _Dehaze(Local_toned_image)
+            else:
+                Dehazed_image = Local_toned_image
+            
             #APPLY CHROMA
             if(Chroma):
                 Chroma_image = _Chroma(Demosaic_image)
@@ -487,10 +629,9 @@ def Process():
             else:
                 Chroma_image = Demosaic_image
                 
-            
             #Uncomment to view original vs modified image (change second parameter after which modification you want the view)
             print("--- %s seconds ---" % (time.time() - start_time))
-            view_image(alignMerged_image,Chroma_image)
+            view_image(alignMerged_image,Dehazed_image.clip(0,1))
             print(' ')
 
 

@@ -173,7 +173,7 @@ def main():
                 classes = {'bottles' : 0, 'paper': 1, 'plastic':2 , 'trash':3} 
                 predClass = predict_pictue()
                 end = time.time()
-                #print(classes)
+                print(classes)
                 print(f'Predicting class is : {list(classes.keys())[list(classes.values()).index(predClass)]}')
                 print(f'Time taken: {end-start} s')
                 
